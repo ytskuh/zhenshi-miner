@@ -1,8 +1,6 @@
 #include <cuda_runtime.h>
-#include <device_launch_parameters.h>
 #include <iostream>
 #include <string>
-#include <vector>
 #include <cstring>
 #include <iomanip>
 #include <openssl/sha.h>
@@ -10,152 +8,24 @@
 #include <random>
 #include <chrono>
 
-#define NUM_HASHES_PER_THREAD 64
+#include "sha256.cu"
+
 #define X_LEN 8
 
-// SHA-256 常量
-const __constant__ uint32_t c_H256[8] = {
-    0x6A09E667U, 0xBB67AE85U, 0x3C6EF372U, 0xA54FF53AU,
-    0x510E527FU, 0x9B05688CU, 0x1F83D9ABU, 0x5BE0CD19U
-};
-
-const __constant__ uint32_t c_K[64] = {
-    0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5, 0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
-    0xD807AA98, 0x12835B01, 0x243185BE, 0x550C7DC3, 0x72BE5D74, 0x80DEB1FE, 0x9BDC06A7, 0xC19BF174,
-    0xE49B69C1, 0xEFBE4786, 0x0FC19DC6, 0x240CA1CC, 0x2DE92C6F, 0x4A7484AA, 0x5CB0A9DC, 0x76F988DA,
-    0x983E5152, 0xA831C66D, 0xB00327C8, 0xBF597FC7, 0xC6E00BF3, 0xD5A79147, 0x06CA6351, 0x14292967,
-    0x27B70A85, 0x2E1B2138, 0x4D2C6DFC, 0x53380D13, 0x650A7354, 0x766A0ABB, 0x81C2C92E, 0x92722C85,
-    0xA2BFE8A1, 0xA81A664B, 0xC24B8B70, 0xC76C51A3, 0xD192E819, 0xD6990624, 0xF40E3585, 0x106AA070,
-    0x19A4C116, 0x1E376C08, 0x2748774C, 0x34B0BCB5, 0x391C0CB3, 0x4ED8AA4A, 0x5B9CCA4F, 0x682E6FF3,
-    0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208, 0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2
-};
-
-// SHA-256 操作函数
-#define ROTR32(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
-
-__device__ __forceinline__ uint32_t xandx(uint32_t e, uint32_t f, uint32_t g) {
-    return (((f) ^ (g)) & (e)) ^ (g);
-}
-
-__device__ __forceinline__ uint32_t bsg2_0(const uint32_t x) {
-    return (ROTR32(x, 2) ^ ROTR32(x, 13) ^ ROTR32(x, 22));
-}
-
-__device__ __forceinline__ uint32_t bsg2_1(const uint32_t x) {
-    return (ROTR32(x, 6) ^ ROTR32(x, 11) ^ ROTR32(x, 25));
-}
-
-__device__ __forceinline__ uint32_t ssg2_0(const uint32_t x) {
-    return (ROTR32(x, 7) ^ ROTR32(x, 18) ^ (x >> 3));
-}
-
-__device__ __forceinline__ uint32_t ssg2_1(const uint32_t x) {
-    return (ROTR32(x, 17) ^ ROTR32(x, 19) ^ (x >> 10));
-}
-
-__device__ __forceinline__ uint32_t andor32(const uint32_t a, const uint32_t b, const uint32_t c) {
-    return ((b) & (c)) | (((b) | (c)) & (a));
-}
-
-__device__ static void sha2_step1(uint32_t a, uint32_t b, uint32_t c, uint32_t &d,
-                                  uint32_t e, uint32_t f, uint32_t g, uint32_t &h,
-                                  uint32_t in, const uint32_t Kshared) {
-    uint32_t t1 = h + bsg2_1(e) + xandx(e, f, g) + Kshared + in;
-    uint32_t t2 = bsg2_0(a) + andor32(a, b, c);
-    d += t1;
-    h = t1 + t2;
-}
-
-__device__ static void sha2_step2(uint32_t a, uint32_t b, uint32_t c, uint32_t &d,
-                                  uint32_t e, uint32_t f, uint32_t g, uint32_t &h,
-                                  uint32_t* in, uint32_t pc, const uint32_t Kshared) {
-    uint32_t t1, t2;
-    int pcidx1 = (pc - 2) & 0xF;
-    int pcidx2 = (pc - 7) & 0xF;
-    int pcidx3 = (pc - 15) & 0xF;
-
-    uint32_t inx0 = in[pc];
-    uint32_t inx1 = in[pcidx1];
-    uint32_t inx2 = in[pcidx2];
-    uint32_t inx3 = in[pcidx3];
-
-    in[pc] = ssg2_1(inx1) + inx2 + ssg2_0(inx3) + inx0;
-
-    t1 = h + bsg2_1(e) + xandx(e, f, g) + Kshared + in[pc];
-    t2 = bsg2_0(a) + andor32(a, b, c);
-    d += t1;
-    h = t1 + t2;
-}
-
-__device__ static void sha256_round_body(uint32_t* in, uint32_t* state, const uint32_t* Kshared) {
-    uint32_t a = state[0];
-    uint32_t b = state[1];
-    uint32_t c = state[2];
-    uint32_t d = state[3];
-    uint32_t e = state[4];
-    uint32_t f = state[5];
-    uint32_t g = state[6];
-    uint32_t h = state[7];
-
-    sha2_step1(a, b, c, d, e, f, g, h, in[0], Kshared[0]);
-    sha2_step1(h, a, b, c, d, e, f, g, in[1], Kshared[1]);
-    sha2_step1(g, h, a, b, c, d, e, f, in[2], Kshared[2]);
-    sha2_step1(f, g, h, a, b, c, d, e, in[3], Kshared[3]);
-    sha2_step1(e, f, g, h, a, b, c, d, in[4], Kshared[4]);
-    sha2_step1(d, e, f, g, h, a, b, c, in[5], Kshared[5]);
-    sha2_step1(c, d, e, f, g, h, a, b, in[6], Kshared[6]);
-    sha2_step1(b, c, d, e, f, g, h, a, in[7], Kshared[7]);
-    sha2_step1(a, b, c, d, e, f, g, h, in[8], Kshared[8]);
-    sha2_step1(h, a, b, c, d, e, f, g, in[9], Kshared[9]);
-    sha2_step1(g, h, a, b, c, d, e, f, in[10], Kshared[10]);
-    sha2_step1(f, g, h, a, b, c, d, e, in[11], Kshared[11]);
-    sha2_step1(e, f, g, h, a, b, c, d, in[12], Kshared[12]);
-    sha2_step1(d, e, f, g, h, a, b, c, in[13], Kshared[13]);
-    sha2_step1(c, d, e, f, g, h, a, b, in[14], Kshared[14]);
-    sha2_step1(b, c, d, e, f, g, h, a, in[15], Kshared[15]);
-
-#pragma unroll
-    for (int i = 0; i < 3; i++) {
-        sha2_step2(a, b, c, d, e, f, g, h, in, 0, Kshared[16 + 16 * i]);
-        sha2_step2(h, a, b, c, d, e, f, g, in, 1, Kshared[17 + 16 * i]);
-        sha2_step2(g, h, a, b, c, d, e, f, in, 2, Kshared[18 + 16 * i]);
-        sha2_step2(f, g, h, a, b, c, d, e, in, 3, Kshared[19 + 16 * i]);
-        sha2_step2(e, f, g, h, a, b, c, d, in, 4, Kshared[20 + 16 * i]);
-        sha2_step2(d, e, f, g, h, a, b, c, in, 5, Kshared[21 + 16 * i]);
-        sha2_step2(c, d, e, f, g, h, a, b, in, 6, Kshared[22 + 16 * i]);
-        sha2_step2(b, c, d, e, f, g, h, a, in, 7, Kshared[23 + 16 * i]);
-        sha2_step2(a, b, c, d, e, f, g, h, in, 8, Kshared[24 + 16 * i]);
-        sha2_step2(h, a, b, c, d, e, f, g, in, 9, Kshared[25 + 16 * i]);
-        sha2_step2(g, h, a, b, c, d, e, f, in, 10, Kshared[26 + 16 * i]);
-        sha2_step2(f, g, h, a, b, c, d, e, in, 11, Kshared[27 + 16 * i]);
-        sha2_step2(e, f, g, h, a, b, c, d, in, 12, Kshared[28 + 16 * i]);
-        sha2_step2(d, e, f, g, h, a, b, c, in, 13, Kshared[29 + 16 * i]);
-        sha2_step2(c, d, e, f, g, h, a, b, in, 14, Kshared[30 + 16 * i]);
-        sha2_step2(b, c, d, e, f, g, h, a, in, 15, Kshared[31 + 16 * i]);
-    }
-
-    state[0] += a;
-    state[1] += b;
-    state[2] += c;
-    state[3] += d;
-    state[4] += e;
-    state[5] += f;
-    state[6] += g;
-    state[7] += h;
-}
-
-// SHA-256 填充
-__device__ __forceinline__ void sha256_pad_64(const uint8_t* input, size_t input_len, uint32_t* padded) {
-    memset(padded, 0, 64);
+// SHA-256 填充, input_len <= 55
+__device__ __forceinline__
+void sha256_pad_64(const uint8_t* input, const size_t input_len, uint32_t* padded) {
 #pragma unroll
     for (size_t i = 0; i < input_len; ++i) 
         padded[i / 4] |= ((uint32_t)input[i]) << ((3 - (i % 4)) * 8);
+
     padded[input_len / 4] |= 0x80 << ((3 - (input_len % 4)) * 8);
     padded[15] = (uint32_t)(input_len * 8);
 }
 
 // 检查前 k 位
-__device__ __forceinline__ bool check_leading_zeros(const uint32_t* hash, int k) {
+__device__ __forceinline__
+bool check_leading_zeros(const uint32_t* hash, const int k) {
     int full_bytes = k / 8;
     int extra_bits = k % 8;
 
@@ -180,7 +50,8 @@ __device__ __forceinline__ bool check_leading_zeros(const uint32_t* hash, int k)
 }
 
 // 生成 64 进制字符串
-__device__ void generate_x(uint64_t index, char* x, const int x_len) {
+__device__
+void generate_x(uint64_t index, char* x, const int x_len) {
 #pragma unroll
     for (int i = x_len - 1; i >= 0; --i) {
         x[i] = '0' + (index & 0x3F);
@@ -189,57 +60,35 @@ __device__ void generate_x(uint64_t index, char* x, const int x_len) {
 }
 
 // CUDA 内核
-__global__ void find_nonce(
-    const char* q, const size_t q_len, const uint64_t start_index, int k,
-    char* result_x, int* found) {
-    __shared__ uint32_t s_K[64];
-    __shared__ char s_q[48];
-
-    if (threadIdx.x < q_len) 
-        s_q[threadIdx.x] = q[threadIdx.x];  
-    if (threadIdx.x < 64)
-        s_K[threadIdx.x] = c_K[threadIdx.x];
-    __syncthreads();
-
-    const uint32_t thread = blockIdx.x * blockDim.x + threadIdx.x;
-    const uint64_t index = (start_index + thread) * 64;
-
+__global__
+void find_nonce(const char* q, const size_t q_len, const uint64_t start_index,
+                    const int k, char* result_x, int* found) {
+    const uint64_t index = (start_index + blockIdx.x * blockDim.x + threadIdx.x) * 64;
     const size_t input_len = q_len + X_LEN;
-    uint8_t input[64];
+    uint8_t input[55];
 
-    memcpy(input, s_q, q_len);
+    memcpy(input, q, q_len);
     generate_x(index, (char*)input + q_len, X_LEN);
 
-    // SHA-256
-    uint32_t state[8];
-    uint32_t padded[64];
-    uint32_t padded_2[64];
-
+    uint32_t state[8], padded[64], padded_2[64]={};
     sha256_pad_64(input, input_len, padded_2);
 
-    const int word_idx = (input_len - 1) / 4;
+    const int word_idx = (input_len-1)/4;
     const uint32_t byte_offset = 0x01U<<((3-((input_len-1)%4))*8);
 
 #pragma unroll
     for (int i = 0; i < 64; i++) {
-        // sha256_pad_64(input, input_len, padded);
         memcpy(state, c_H256, 32);
         memcpy(padded, padded_2, 64);
-        sha256_round_body(padded, state, s_K);
+        sha256_round_body(padded, state, c_K);
 
-        // 检查前导零
         if (check_leading_zeros(state, k) && !atomicCAS(found, 0, 1)) {
-            input[q_len + X_LEN - 1] = '0' + i;
             memcpy(result_x, input + q_len, X_LEN);
+            result_x[X_LEN-1] = '0'+i;
             return;
         }
         padded_2[word_idx] += byte_offset;
     }
-}
-
-// OpenSSL SHA-256
-void compute_sha256_openssl(const std::string& input, unsigned char* hash) {
-    EVP_Digest(input.c_str(), input.length(), hash, nullptr, EVP_sha256(), nullptr);
 }
 
 int main(int argc, char* argv[]) {
@@ -265,13 +114,9 @@ int main(int argc, char* argv[]) {
     }
 
     std::string output_mode = argv[3];
-    bool full_output = true;
-    if (output_mode == "minimal") {
-        full_output = false;
-    } else if (output_mode != "full") {
-        std::cerr << "Error: output must be 'full' or 'minimal'" << std::endl;
-        return 1;
-    }
+    bool minimal_output = true;
+    if (output_mode == "full")
+        minimal_output = false;
 
     size_t q_len = q.length();
     const int x_len = 8;
@@ -282,21 +127,17 @@ int main(int argc, char* argv[]) {
     cudaMemcpy(d_q, q.c_str(), q_len, cudaMemcpyHostToDevice);
 
     char* d_result_x;
-    cudaMalloc(&d_result_x, 16 * sizeof(char)); // 单解，16 字节
-    cudaMemset(d_result_x, 0, 16 * sizeof(char));
-
-    uint32_t* d_result_hash;
-    cudaMalloc(&d_result_hash, 8 * sizeof(uint32_t)); // 单解，32 字节
-    cudaMemset(d_result_hash, 0, 8 * sizeof(uint32_t));
+    cudaMalloc(&d_result_x, X_LEN * sizeof(char));
+    cudaMemset(d_result_x, 0, X_LEN * sizeof(char));
 
     int* d_found;
     cudaMalloc(&d_found, sizeof(int));
     cudaMemset(d_found, 0, sizeof(int));
 
     // 线程配置
-    const int block_size = 256;
-    const int grid_size = 24*6; 
-    const int num_threads = block_size * grid_size;
+    const unsigned int grid_size = 96;
+    const unsigned int block_size = 512;
+    const unsigned int num_threads = block_size * grid_size;
 
     // 随机起点
     std::random_device rd;
@@ -308,66 +149,43 @@ int main(int argc, char* argv[]) {
     uint64_t total_hashes = 0;
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    if (full_output) {
+    if (!minimal_output) {
         std::cout << "Searching for x with " << k << " leading zeros for q = \"" << q << "\"" 
                   << " (random start: " << start_index << ")..." << std::endl;
     }
 
     // 主循环
-    bool found = false;
-    while (!found) {
+    int h_found = 0;
+    while (!h_found) {
         find_nonce<<<grid_size, block_size>>>(d_q, q_len, start_index, k, d_result_x, d_found);
         cudaDeviceSynchronize();
 
-        total_hashes += num_threads*NUM_HASHES_PER_THREAD;
-
-        int h_found;
+        total_hashes += num_threads*64;
+        start_index += num_threads;
         cudaMemcpy(&h_found, d_found, sizeof(int), cudaMemcpyDeviceToHost);
-        if (h_found) {
-            break;
-        } 
-        start_index = dist(gen);
-        cudaMemset(d_found, 0, sizeof(int));
     }
-
 
     // 获取结果
-    std::vector<char> result_x(16);
-    cudaMemcpy(result_x.data(), d_result_x, 16 * sizeof(char), cudaMemcpyDeviceToHost);
-    // std::vector<uint32_t> result_hash(8);
-    // cudaMemcpy(result_hash.data(), d_result_hash, 8 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    std::vector<char> result_x(X_LEN);
+    cudaMemcpy(result_x.data(), d_result_x, X_LEN * sizeof(char), cudaMemcpyDeviceToHost);
 
     std::string x(result_x.data(), x_len);
-    if (!full_output) {
+    if (minimal_output) {
         std::cout << x << std::endl;
-        return 0;
-    }
+    } else {
 
     std::cout << "Found x: " << x << std::endl;
     std::string q_plus_x = q + x;
     std::cout << "q + x: " << q_plus_x << std::endl;
 
-    // CUDA 哈希
-    // std::cout << "CUDA SHA-256(q + x) = ";
-    // for (int j = 0; j < 8; ++j) {
-    //     uint32_t word = result_hash[j];
-    //     for (int b = 3; b >= 0; --b) {
-    //         std::cout << std::hex << std::setw(2) << std::setfill('0') 
-    //                     << ((word >> (b * 8)) & 0xFF);
-    //     }
-    // }
-    // std::cout << std::dec << std::endl;
-
     // OpenSSL 验证
     unsigned char hash[SHA256_DIGEST_LENGTH];
-    compute_sha256_openssl(q_plus_x, hash);
+    EVP_Digest(q_plus_x.c_str(), q_plus_x.length(), hash, nullptr, EVP_sha256(), nullptr);
 
-    if (full_output) {
-        std::cout << "OpenSSL SHA-256(q + x) = ";
-        for (int j = 0; j < SHA256_DIGEST_LENGTH; ++j)
-            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)hash[j];
-        std::cout << std::dec << std::endl;
-    }
+    std::cout << "OpenSSL SHA-256(q + x) = ";
+    for (int j = 0; j < SHA256_DIGEST_LENGTH; ++j)
+        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)hash[j];
+    std::cout << std::dec << std::endl;
 
     // 验证前导零
     int leading_zeros = 0;
@@ -384,26 +202,22 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (full_output) 
-        std::cout << "Leading zeros: " << leading_zeros << " (expected: " << k << ")" << std::endl;
-
+    std::cout << "Leading zeros: " << leading_zeros << " (expected: " << k << ")" << std::endl;
     if (leading_zeros >= k) {
-        found = true;
-        if (full_output) {
-            auto end_time = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            double seconds = duration.count() / 1e6;
-            double hash_rate = total_hashes / seconds / 1e6;
-            std::cout << "Hash rate: " << std::fixed << std::setprecision(2) 
-                        << hash_rate << " MH/s" << std::endl;
-        }
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        double seconds = duration.count() / 1e6;
+        double hash_rate = total_hashes / seconds / 1e6;
+        std::cout << "Hash rate: " << std::fixed << std::setprecision(2) 
+                    << hash_rate << " MH/s" << std::endl;
+        std::cout << "Total hashes: " << total_hashes << std::endl;
     } 
-    else if (full_output) 
+    else 
         std::cout << "Invalid result" << std::endl;
-    // 清理
+    }
+
     cudaFree(d_q);
     cudaFree(d_result_x);
-    cudaFree(d_result_hash);
     cudaFree(d_found);
 
     return 0;
