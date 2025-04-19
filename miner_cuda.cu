@@ -13,9 +13,8 @@
 #define X_LEN 8
 
 // SHA-256 填充, input_len <= 55
-__device__ __forceinline__
+__device__
 void sha256_pad_64(const uint8_t* input, const size_t input_len, uint32_t* padded) {
-#pragma unroll
     for (size_t i = 0; i < input_len; ++i) 
         padded[i / 4] |= ((uint32_t)input[i]) << ((3 - (i % 4)) * 8);
 
@@ -24,12 +23,11 @@ void sha256_pad_64(const uint8_t* input, const size_t input_len, uint32_t* padde
 }
 
 // 检查前 k 位
-__device__ __forceinline__
+__device__
 bool check_leading_zeros(const uint32_t* hash, const int k) {
     int full_bytes = k / 8;
     int extra_bits = k % 8;
 
-#pragma unroll
     for (int i = 0; i < full_bytes; ++i) {
         int byte_idx = i / 4;
         int byte_offset = 3 - (i % 4);
@@ -52,7 +50,6 @@ bool check_leading_zeros(const uint32_t* hash, const int k) {
 // 生成 64 进制字符串
 __device__
 void generate_x(uint64_t index, char* x, const int x_len) {
-#pragma unroll
     for (int i = x_len - 1; i >= 0; --i) {
         x[i] = '0' + (index & 0x3F);
         index >>= 6;
@@ -76,7 +73,6 @@ void find_nonce(const char* q, const size_t q_len, const uint64_t start_index,
     const int word_idx = (input_len-1)/4;
     const uint32_t byte_offset = 0x01U<<((3-((input_len-1)%4))*8);
 
-#pragma unroll
     for (int i = 0; i < 64; i++) {
         memcpy(state, c_H256, 32);
         memcpy(padded, padded_2, 64);
