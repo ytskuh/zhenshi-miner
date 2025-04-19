@@ -6,10 +6,11 @@
 #include <cstring>
 #include <iomanip>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 #include <random>
 #include <chrono>
 
-#define NUM_HASHES_PER_THREAD 64
+#define NUM_HASHES_PER_THREAD 128
 #define X_LEN 8
 
 // SHA-256 常量
@@ -144,22 +145,17 @@ __device__ static void sha256_round_body(uint32_t* in, uint32_t* state, const ui
 }
 
 // SHA-256 填充
-__device__ void sha256_pad(uint8_t* input, size_t len, uint32_t* padded, size_t& padded_len) {
-    for (size_t i = 0; i < len; ++i) {
+__device__ __forceinline__ void sha256_pad_64(const uint8_t* input, size_t input_len, uint32_t* padded) {
+    memset(padded, 0, 64);
+#pragma unroll
+    for (size_t i = 0; i < input_len; ++i) 
         padded[i / 4] |= ((uint32_t)input[i]) << ((3 - (i % 4)) * 8);
-    }
-    padded[len / 4] |= 0x80U << ((3 - (len % 4)) * 8);
-    padded_len = ((len + 8 + 63) / 64) * 64;
-    for (size_t i = len + 1; i < padded_len - 8; ++i) {
-        padded[i / 4] &= ~(0xFFU << ((3 - (i % 4)) * 8));
-    }
-    uint64_t bit_len = len * 8;
-    padded[(padded_len / 4) - 2] = (uint32_t)(bit_len >> 32);
-    padded[(padded_len / 4) - 1] = (uint32_t)bit_len;
+    padded[input_len / 4] |= 0x80 << ((3 - (input_len % 4)) * 8);
+    padded[15] = (uint32_t)(input_len * 8);
 }
 
 // 检查前 k 位
-__device__ bool check_leading_zeros(const uint32_t* hash, int k) {
+__device__ __forceinline__ bool check_leading_zeros(const uint32_t* hash, int k) {
     int full_bytes = k / 8;
     int extra_bits = k % 8;
 
@@ -193,28 +189,22 @@ __device__ void generate_x(uint64_t index, char* x, const int x_len) {
 }
 
 // CUDA 内核
-__global__ void find_nonce(const char* q, size_t q_len, uint64_t start_index, int k,
-    char* result_x, uint32_t* result_hash, int* found) {
+__global__ void find_nonce(
+    const char* q, const size_t q_len, const uint64_t start_index, int k,
+    char* result_x, int* found) {
     __shared__ uint32_t s_K[64];
-    __shared__ uint32_t s_H256[8];
-    __shared__ char s_q[64];
-    __shared__ int s_k;
+    __shared__ char s_q[48];
 
-    // 协作加载 q 和 c_K
     if (threadIdx.x < q_len) 
         s_q[threadIdx.x] = q[threadIdx.x];  
     if (threadIdx.x < 64)
         s_K[threadIdx.x] = c_K[threadIdx.x];
-    if (threadIdx.x < 8)
-        s_H256[threadIdx.x] = c_H256[threadIdx.x];
-    if (threadIdx.x == 0)
-        s_k = k;
     __syncthreads();
 
-    uint32_t thread = blockIdx.x * blockDim.x + threadIdx.x;
-    uint64_t index = start_index + thread * NUM_HASHES_PER_THREAD;
-            // 拼接 q 和 x
-    size_t input_len = q_len + X_LEN;
+    const uint32_t thread = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t index = start_index + thread * NUM_HASHES_PER_THREAD;
+
+    const size_t input_len = q_len + X_LEN;
     uint8_t input[64];
 
     memcpy(input, s_q, q_len);
@@ -222,23 +212,18 @@ __global__ void find_nonce(const char* q, size_t q_len, uint64_t start_index, in
 
     // SHA-256
     uint32_t state[8];
-    bool old = 1;
-    size_t padded_len;
-    uint32_t padded[64] = {};
+    uint32_t padded[64];
 
     // 每个线程计算 NUM_HASHES_PER_THREAD 个哈希
     for (int i = 0; i < NUM_HASHES_PER_THREAD; ++i) {
-        memset(padded, 0, padded_len);     
-        sha256_pad(input, input_len, padded, padded_len);
-        memcpy(state, s_H256, 32);     
-        for (size_t block = 0; block < padded_len>>6; ++block)
-            sha256_round_body(&padded[block<<4], state, s_K);
+        sha256_pad_64(input, input_len, padded);
+        memcpy(state, c_H256, 32);     
+        sha256_round_body(padded, state, s_K);
 
         // 检查前导零
-        if (check_leading_zeros(state, s_k)) {
-            // 尝试设置 found 标志
-            old = atomicCAS(found, 0, 1);
-            break;
+        if (check_leading_zeros(state, k) && !atomicCAS(found, 0, 1)) {
+            memcpy(result_x, input + q_len, X_LEN);
+            return;
         }
 
 #pragma unroll
@@ -250,18 +235,11 @@ __global__ void find_nonce(const char* q, size_t q_len, uint64_t start_index, in
             input[q_len + j] = '0';
         }
     }
-
-    if (!old) {
-        memcpy(result_x, input + q_len, X_LEN);
-        memcpy(result_hash, state, 32);
-    }
 }
+
 // OpenSSL SHA-256
 void compute_sha256_openssl(const std::string& input, unsigned char* hash) {
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, input.c_str(), input.length());
-    SHA256_Final(hash, &sha256);
+    EVP_Digest(input.c_str(), input.length(), hash, nullptr, EVP_sha256(), nullptr);
 }
 
 int main(int argc, char* argv[]) {
@@ -316,8 +294,8 @@ int main(int argc, char* argv[]) {
     cudaMemset(d_found, 0, sizeof(int));
 
     // 线程配置
-    const int block_size = 192;
-    const int grid_size = 512; 
+    const int block_size = 256;
+    const int grid_size = 24*6; 
     const int num_threads = block_size * grid_size;
 
     // 随机起点
@@ -338,7 +316,7 @@ int main(int argc, char* argv[]) {
     // 主循环
     bool found = false;
     while (!found) {
-        find_nonce<<<grid_size, block_size>>>(d_q, q_len, start_index, k, d_result_x, d_result_hash, d_found);
+        find_nonce<<<grid_size, block_size>>>(d_q, q_len, start_index, k, d_result_x, d_found);
         cudaDeviceSynchronize();
 
         total_hashes += num_threads*NUM_HASHES_PER_THREAD;
@@ -356,48 +334,47 @@ int main(int argc, char* argv[]) {
     // 获取结果
     std::vector<char> result_x(16);
     cudaMemcpy(result_x.data(), d_result_x, 16 * sizeof(char), cudaMemcpyDeviceToHost);
-    std::vector<uint32_t> result_hash(8);
-    cudaMemcpy(result_hash.data(), d_result_hash, 8 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    // std::vector<uint32_t> result_hash(8);
+    // cudaMemcpy(result_hash.data(), d_result_hash, 8 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
     std::string x(result_x.data(), x_len);
     if (!full_output) {
         std::cout << x << std::endl;
-    } else {
-        std::cout << "Found x: " << x << std::endl;
-        std::string q_plus_x = q + x;
-        std::cout << "q + x: " << q_plus_x << std::endl;
-
-        // CUDA 哈希
-        std::cout << "CUDA SHA-256(q + x) = ";
-        for (int j = 0; j < 8; ++j) {
-            uint32_t word = result_hash[j];
-            for (int b = 3; b >= 0; --b) {
-                std::cout << std::hex << std::setw(2) << std::setfill('0') 
-                            << ((word >> (b * 8)) & 0xFF);
-            }
-        }
-        std::cout << std::dec << std::endl;
+        return 0;
     }
 
-    // OpenSSL 验证
+    std::cout << "Found x: " << x << std::endl;
     std::string q_plus_x = q + x;
+    std::cout << "q + x: " << q_plus_x << std::endl;
+
+    // CUDA 哈希
+    // std::cout << "CUDA SHA-256(q + x) = ";
+    // for (int j = 0; j < 8; ++j) {
+    //     uint32_t word = result_hash[j];
+    //     for (int b = 3; b >= 0; --b) {
+    //         std::cout << std::hex << std::setw(2) << std::setfill('0') 
+    //                     << ((word >> (b * 8)) & 0xFF);
+    //     }
+    // }
+    // std::cout << std::dec << std::endl;
+
+    // OpenSSL 验证
     unsigned char hash[SHA256_DIGEST_LENGTH];
     compute_sha256_openssl(q_plus_x, hash);
 
     if (full_output) {
         std::cout << "OpenSSL SHA-256(q + x) = ";
-        for (int j = 0; j < SHA256_DIGEST_LENGTH; ++j) {
+        for (int j = 0; j < SHA256_DIGEST_LENGTH; ++j)
             std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)hash[j];
-        }
         std::cout << std::dec << std::endl;
     }
 
     // 验证前导零
     int leading_zeros = 0;
     for (int j = 0; j < SHA256_DIGEST_LENGTH; ++j) {
-        if (hash[j] == 0) {
+        if (hash[j] == 0)
             leading_zeros += 8;
-        } else {
+        else {
             uint8_t byte = hash[j];
             for (int b = 7; b >= 0; --b) {
                 if (byte & (1 << b)) break;
@@ -407,9 +384,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (full_output) {
+    if (full_output) 
         std::cout << "Leading zeros: " << leading_zeros << " (expected: " << k << ")" << std::endl;
-    }
 
     if (leading_zeros >= k) {
         found = true;
@@ -421,13 +397,9 @@ int main(int argc, char* argv[]) {
             std::cout << "Hash rate: " << std::fixed << std::setprecision(2) 
                         << hash_rate << " MH/s" << std::endl;
         }
-    } else if (full_output) {
-        std::cout << "Invalid result, continuing search..." << std::endl;
-        cudaMemset(d_found, 0, sizeof(int));
-        cudaMemset(d_result_x, 0, 16 * sizeof(char));
-        cudaMemset(d_result_hash, 0, 8 * sizeof(uint32_t));
-        start_index = dist(gen);
-    }
+    } 
+    else if (full_output) 
+        std::cout << "Invalid result" << std::endl;
     // 清理
     cudaFree(d_q);
     cudaFree(d_result_x);
