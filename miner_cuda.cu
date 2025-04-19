@@ -10,7 +10,7 @@
 #include <random>
 #include <chrono>
 
-#define NUM_HASHES_PER_THREAD 128
+#define NUM_HASHES_PER_THREAD 64
 #define X_LEN 8
 
 // SHA-256 常量
