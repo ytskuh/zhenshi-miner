@@ -202,7 +202,7 @@ __global__ void find_nonce(
     __syncthreads();
 
     const uint32_t thread = blockIdx.x * blockDim.x + threadIdx.x;
-    const uint64_t index = start_index + thread * NUM_HASHES_PER_THREAD;
+    const uint64_t index = (start_index + thread) * 64;
 
     const size_t input_len = q_len + X_LEN;
     uint8_t input[64];
@@ -213,27 +213,27 @@ __global__ void find_nonce(
     // SHA-256
     uint32_t state[8];
     uint32_t padded[64];
+    uint32_t padded_2[64];
 
-    // 每个线程计算 NUM_HASHES_PER_THREAD 个哈希
-    for (int i = 0; i < NUM_HASHES_PER_THREAD; ++i) {
-        sha256_pad_64(input, input_len, padded);
-        memcpy(state, c_H256, 32);     
+    sha256_pad_64(input, input_len, padded_2);
+
+    const int word_idx = (input_len - 1) / 4;
+    const uint32_t byte_offset = 0x01U<<((3-((input_len-1)%4))*8);
+
+#pragma unroll
+    for (int i = 0; i < 64; i++) {
+        // sha256_pad_64(input, input_len, padded);
+        memcpy(state, c_H256, 32);
+        memcpy(padded, padded_2, 64);
         sha256_round_body(padded, state, s_K);
 
         // 检查前导零
         if (check_leading_zeros(state, k) && !atomicCAS(found, 0, 1)) {
+            input[q_len + X_LEN - 1] = '0' + i;
             memcpy(result_x, input + q_len, X_LEN);
             return;
         }
-
-#pragma unroll
-        for (int j = X_LEN - 1; j >= 0; --j) {
-            if (input[q_len + j] < '0' + 63) {
-                input[q_len + j]++;
-                break;
-            }
-            input[q_len + j] = '0';
-        }
+        padded_2[word_idx] += byte_offset;
     }
 }
 
