@@ -31,18 +31,16 @@ bool check_leading_zeros(const uint32_t* hash, const int k) {
     for (int i = 0; i < full_bytes; i++) {
         int byte_idx = i/4;
         int byte_offset = 3-i%4;
-        if (((uint8_t*)&hash[byte_idx])[byte_offset] != 0) {
+        if (((uint8_t*)&hash[byte_idx])[byte_offset] != 0)
             return false;
-        }
     }
 
     if (extra_bits > 0) {
         int byte_idx = full_bytes/4;
         int byte_offset = 3-full_bytes%4;
         uint8_t byte = ((uint8_t*)&hash[byte_idx])[byte_offset];
-        if (byte >> 8-extra_bits != 0) {
+        if (byte >> 8-extra_bits != 0)
             return false;
-        }
     }
     return true;
 }
