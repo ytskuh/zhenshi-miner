@@ -14,33 +14,33 @@
 
 // SHA-256 填充, input_len <= 55
 __device__
-void sha256_pad_64(const uint8_t* input, const size_t input_len, uint32_t* padded) {
-    for (size_t i = 0; i < input_len; ++i) 
-        padded[i / 4] |= ((uint32_t)input[i]) << ((3 - (i % 4)) * 8);
+void sha256_pad_64(const char* input, const size_t input_len, uint32_t* padded) {
+    for (size_t i=0; i<input_len; i++) 
+        padded[i/4] |= (uint32_t)input[i] << (3-i%4)*8;
 
-    padded[input_len / 4] |= 0x80 << ((3 - (input_len % 4)) * 8);
-    padded[15] = (uint32_t)(input_len * 8);
+    padded[input_len/4] |= 0x80 << (3-input_len%4)*8;
+    padded[15] = (uint32_t)(input_len*8);
 }
 
 // 检查前 k 位
 __device__
 bool check_leading_zeros(const uint32_t* hash, const int k) {
-    int full_bytes = k / 8;
-    int extra_bits = k % 8;
+    int full_bytes = k/8;
+    int extra_bits = k%8;
 
-    for (int i = 0; i < full_bytes; ++i) {
-        int byte_idx = i / 4;
-        int byte_offset = 3 - (i % 4);
+    for (int i = 0; i < full_bytes; i++) {
+        int byte_idx = i/4;
+        int byte_offset = 3-i%4;
         if (((uint8_t*)&hash[byte_idx])[byte_offset] != 0) {
             return false;
         }
     }
 
     if (extra_bits > 0) {
-        int byte_idx = full_bytes / 4;
-        int byte_offset = 3 - (full_bytes % 4);
+        int byte_idx = full_bytes/4;
+        int byte_offset = 3-full_bytes%4;
         uint8_t byte = ((uint8_t*)&hash[byte_idx])[byte_offset];
-        if (byte >> (8 - extra_bits) != 0) {
+        if (byte >> 8-extra_bits != 0) {
             return false;
         }
     }
@@ -50,7 +50,7 @@ bool check_leading_zeros(const uint32_t* hash, const int k) {
 // 生成 64 进制字符串
 __device__
 void generate_x(uint64_t index, char* x, const int x_len) {
-    for (int i = x_len - 1; i >= 0; --i) {
+    for (int i = x_len-1; i>=0; i--) {
         x[i] = '0' + (index & 0x3F);
         index >>= 6;
     }
@@ -61,17 +61,18 @@ __global__
 void find_nonce(const char* q, const size_t q_len, const uint64_t start_index,
                     const int k, char* result_x, int* found) {
     const uint64_t index = (start_index + blockIdx.x * blockDim.x + threadIdx.x) * 64;
+    
     const size_t input_len = q_len + X_LEN;
-    uint8_t input[55];
+    char input[55];
 
     memcpy(input, q, q_len);
-    generate_x(index, (char*)input + q_len, X_LEN);
+    generate_x(index, input + q_len, X_LEN);
 
     uint32_t state[8], padded[64], padded_2[64]={};
     sha256_pad_64(input, input_len, padded_2);
 
-    const int word_idx = (input_len-1)/4;
-    const uint32_t byte_offset = 0x01U<<((3-((input_len-1)%4))*8);
+    const size_t word_idx = (input_len-1)/4;
+    const uint32_t byte_offset = 0x01U << (3-(input_len-1)%4)*8;
 
     for (int i = 0; i < 64; i++) {
         memcpy(state, c_H256, 32);
@@ -97,6 +98,10 @@ int main(int argc, char* argv[]) {
     std::string q = argv[1];
     if (q.empty()) {
         std::cerr << "Error: q cannot be empty" << std::endl;
+        return 1;
+    }
+    if (q.length() > 55-X_LEN) {
+        std::cerr << "Error: q length must be <= "<< 55-X_LEN << std::endl;
         return 1;
     }
 
@@ -138,7 +143,7 @@ int main(int argc, char* argv[]) {
     // 随机起点
     std::random_device rd;
     std::mt19937_64 gen(rd());
-    std::uniform_int_distribution<uint64_t> dist(0, (1ULL << 48) - num_threads);
+    std::uniform_int_distribution<uint64_t> dist(0, 1ULL << 48);
     uint64_t start_index = dist(gen);
 
     // 哈希率统计

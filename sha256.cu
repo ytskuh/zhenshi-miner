@@ -1,7 +1,13 @@
+/*
+ * SHA-256 CUDA implementation
+ * borrowed from tpruvot 2017 sha256d CUDA implementation
+ * https://github.com/tpruvot/ccminer/blob/windows/sha256/cuda_sha256d.cu
+ */
+
 #include <stdint.h>
 
 // SHA-256 常量
-const __constant__ uint32_t c_H256[8] = {
+const __constant__ uint32_t __align__(8) c_H256[8] = {
     0x6A09E667U, 0xBB67AE85U, 0x3C6EF372U, 0xA54FF53AU,
     0x510E527FU, 0x9B05688CU, 0x1F83D9ABU, 0x5BE0CD19U
 };
@@ -17,67 +23,87 @@ const __constant__ uint32_t c_K[64] = {
     0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208, 0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2
 };
 
-// SHA-256 操作函数
+// SHA-256 轮函数
 #define ROTR32(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+#define xor3b(a,b,c) (a ^ b ^ c)
 
-__device__ __forceinline__ uint32_t xandx(uint32_t e, uint32_t f, uint32_t g) {
-    return (((f) ^ (g)) & (e)) ^ (g);
-}
+__device__ __forceinline__ uint32_t bsg2_0(const uint32_t x)
+{ return xor3b(ROTR32(x,2),ROTR32(x,13),ROTR32(x,22)); }
 
-__device__ __forceinline__ uint32_t bsg2_0(const uint32_t x) {
-    return (ROTR32(x, 2) ^ ROTR32(x, 13) ^ ROTR32(x, 22));
-}
+__device__ __forceinline__ uint32_t bsg2_1(const uint32_t x)
+{ return xor3b(ROTR32(x,6),ROTR32(x,11),ROTR32(x,25)); }
 
-__device__ __forceinline__ uint32_t bsg2_1(const uint32_t x) {
-    return (ROTR32(x, 6) ^ ROTR32(x, 11) ^ ROTR32(x, 25));
-}
+__device__ __forceinline__ uint32_t ssg2_0(const uint32_t x)
+{ return xor3b(ROTR32(x,7),ROTR32(x,18),(x>>3)); }
 
-__device__ __forceinline__ uint32_t ssg2_0(const uint32_t x) {
-    return (ROTR32(x, 7) ^ ROTR32(x, 18) ^ (x >> 3));
-}
-
-__device__ __forceinline__ uint32_t ssg2_1(const uint32_t x) {
-    return (ROTR32(x, 17) ^ ROTR32(x, 19) ^ (x >> 10));
-}
+__device__ __forceinline__ uint32_t ssg2_1(const uint32_t x)
+{ return xor3b(ROTR32(x,17),ROTR32(x,19),(x>>10)); }
 
 __device__ __forceinline__ uint32_t andor32(const uint32_t a, const uint32_t b, const uint32_t c) {
-    return ((b) & (c)) | (((b) | (c)) & (a));
+	uint32_t result;
+	asm("{\n\t"
+		".reg .u32 m,n,o;\n\t"
+		"and.b32 m,  %1, %2;\n\t"
+		" or.b32 n,  %1, %2;\n\t"
+		"and.b32 o,   n, %3;\n\t"
+		" or.b32 %0,  m, o ;\n\t"
+		"}\n\t" : "=r"(result) : "r"(a), "r"(b), "r"(c)
+	);
+	return result;
+}
+
+__device__ __forceinline__
+uint32_t xandx(uint32_t a, uint32_t b, uint32_t c)
+{ return ((b^c) & a) ^ c; }
+
+__device__
+static void sha2_step1(uint32_t a, uint32_t b, uint32_t c, uint32_t &d, uint32_t e, uint32_t f, uint32_t g, uint32_t &h,
+	uint32_t in, const uint32_t Kshared)
+{
+	uint32_t t1,t2;
+	uint32_t vxandx = xandx(e, f, g);
+	uint32_t bsg21 = bsg2_1(e);
+	uint32_t bsg20 = bsg2_0(a);
+	uint32_t andorv = andor32(a,b,c);
+
+	t1 = h + bsg21 + vxandx + Kshared + in;
+	t2 = bsg20 + andorv;
+	d = d + t1;
+	h = t1 + t2;
 }
 
 __device__
-static void sha2_step1(uint32_t a, uint32_t b, uint32_t c, uint32_t &d,
-                            uint32_t e, uint32_t f, uint32_t g, uint32_t &h,
-                            uint32_t in, const uint32_t Kshared) {
-    uint32_t t1 = h + bsg2_1(e) + xandx(e, f, g) + Kshared + in;
-    uint32_t t2 = bsg2_0(a) + andor32(a, b, c);
-    d += t1;
-    h = t1 + t2;
+static void sha2_step2(uint32_t a, uint32_t b, uint32_t c, uint32_t &d, uint32_t e, uint32_t f, uint32_t g, uint32_t &h,
+	uint32_t* in, uint32_t pc, const uint32_t Kshared)
+{
+	uint32_t t1,t2;
+
+	int pcidx1 = (pc-2) & 0xF;
+	int pcidx2 = (pc-7) & 0xF;
+	int pcidx3 = (pc-15) & 0xF;
+
+	uint32_t inx0 = in[pc];
+	uint32_t inx1 = in[pcidx1];
+	uint32_t inx2 = in[pcidx2];
+	uint32_t inx3 = in[pcidx3];
+
+	uint32_t ssg21 = ssg2_1(inx1);
+	uint32_t ssg20 = ssg2_0(inx3);
+	uint32_t vxandx = xandx(e, f, g);
+	uint32_t bsg21 = bsg2_1(e);
+	uint32_t bsg20 = bsg2_0(a);
+	uint32_t andorv = andor32(a,b,c);
+
+	in[pc] = ssg21 + inx2 + ssg20 + inx0;
+
+	t1 = h + bsg21 + vxandx + Kshared + in[pc];
+	t2 = bsg20 + andorv;
+	d =  d + t1;
+	h = t1 + t2;
 }
 
 __device__
-static void sha2_step2(uint32_t a, uint32_t b, uint32_t c, uint32_t &d,
-                            uint32_t e, uint32_t f, uint32_t g, uint32_t &h,
-                            uint32_t* in, uint32_t pc, const uint32_t Kshared) {
-    uint32_t t1, t2;
-    int pcidx1 = (pc - 2) & 0xF;
-    int pcidx2 = (pc - 7) & 0xF;
-    int pcidx3 = (pc - 15) & 0xF;
-
-    uint32_t inx0 = in[pc];
-    uint32_t inx1 = in[pcidx1];
-    uint32_t inx2 = in[pcidx2];
-    uint32_t inx3 = in[pcidx3];
-
-    in[pc] = ssg2_1(inx1) + inx2 + ssg2_0(inx3) + inx0;
-
-    t1 = h + bsg2_1(e) + xandx(e, f, g) + Kshared + in[pc];
-    t2 = bsg2_0(a) + andor32(a, b, c);
-    d += t1;
-    h = t1 + t2;
-}
-
-__device__
-void sha256_round_body(uint32_t* in, uint32_t* state, const uint32_t* Kshared) {
+static void sha256_round_body(uint32_t* in, uint32_t* state, const uint32_t* Kshared) {
     uint32_t a = state[0];
     uint32_t b = state[1];
     uint32_t c = state[2];
