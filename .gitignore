@@ -1,0 +1,12 @@
+/__pycache__
+/.venv
+/.vscode
+/proxy_pool
+
+sha256_finder*
+
+
+
+miner.__pycache__
+
+lab.ipynb
