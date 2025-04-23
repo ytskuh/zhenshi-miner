@@ -1,6 +1,29 @@
 import requests
 import json
-import hashlib
+
+from dataclasses import dataclass
+
+@dataclass
+class Account:
+    username: str
+    password: str
+    nickname: str
+    userPic: str
+    androidId: str
+    ip: str
+    token: str
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            username=data.get('username', None),
+            password=data.get('password', None),
+            nickname=data.get('nickname', None),
+            userPic=data.get('userPic', None),
+            androidId=data.get('androidId', None),
+            ip=data.get('ip', None),
+            token=data.get('token', None)
+        )
 
 default_headers = {
     "Host": "www.xionger.icu:8080",
@@ -10,48 +33,24 @@ default_headers = {
     "Content-Type": "application/x-www-form-urlencoded"
 }
 
-def username_to_password(username):
-        # 固定的盐值
-        tail = "SomeThingAddToUsername7527"
-        
-        # 拼接用户名和盐值
-        salted_username = username + tail
-        
-        # 使用SHA-256哈希算法
-        sha256 = hashlib.sha256()
-        sha256.update(salted_username.encode('utf-8'))
-        
-        # 将哈希值转换为十六进制字符串
-        hashed_password = sha256.hexdigest()
-        
-        return hashed_password
-
-def login(username, picurl, nickname, deviceid, ip):
-    url = f"http://{default_headers['Host']}/user/login"
-    password = username_to_password(username)
-    payload = f"username={username}&password={password}&picurl={picurl}&nickname={nickname}&deviceid={deviceid}&ip={ip}"
-    headers = default_headers.copy()
-    headers["Content-Length"] = str(len(payload))
-    try:
-        response = requests.post(url, headers=headers, data=payload)
-        response.raise_for_status()  # Raise an error for bad responses
-        return response.json()
-    except requests.RequestException as e:
-        print(f"Request failed: {e}")
-        return None
-
 class Zhenshi:
-    def __init__(self, auth = None, proxy = None):
-        if auth is None:
-            raise ValueError("Account must be provided")
-        self.Host = f"http://{default_headers['Host']}"
+    def __init__(self, account: Account, proxy=None):
+        self.account = account
         self.default_headers = default_headers.copy()
-        self.default_headers["Authorization"] = auth
         self.proxy = proxy
+        self.fakeip = account.ip
+        self.Host = f"http://{default_headers['Host']}"
+        if account.token is None:
+            raise ValueError("Account must be provided")
+        self.token = account.token
+        self.default_headers["Authorization"] = account.token
+
     
     def send_request(self, endpoint, headers, data):
         submit_headers = headers.copy()  # Create a copy to avoid shared state issues
         submit_headers["Content-Length"] = str(len(data))
+        if self.fakeip:
+            submit_headers["X-Forwarded-For"] = self.fakeip
         try:
             response = requests.post(f"{self.Host}/{endpoint}", headers=submit_headers, data=data, proxies=self.proxy)
             response.raise_for_status()  # Raise an error for bad responses
@@ -62,6 +61,17 @@ class Zhenshi:
         except json.JSONDecodeError as e:
             print(f"JSON decode error: {e}")
             return None
+        
+    def login(self):
+        endpoint = "user/login"
+        data = f"username={self.account.username}&password={self.account.password}&picurl={self.account.userPic}&nickname={self.account.nickname}&deviceid={self.account.androidId}&ip={self.fakeip}"
+        response = self.send_request(endpoint, self.default_headers, data)
+        if response and 'data' in response:
+            self.token = response['message']
+            self.default_headers["Authorization"] = self.token
+            return response
+        else:
+            raise ValueError("Login failed or invalid response")
         
     def check(self):
         endpoint = "user/checked"
