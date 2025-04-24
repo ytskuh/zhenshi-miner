@@ -24,6 +24,18 @@ class Account:
             ip=data.get('ip', None),
             token=data.get('token', None)
         )
+    
+    @classmethod
+    def to_dict(cls, account):
+        return {
+            'username': account.username,
+            'password': account.password,
+            'nickname': account.nickname,
+            'userPic': account.userPic,
+            'androidId': account.androidId,
+            'ip': account.ip,
+            'token': account.token
+        }
 
 default_headers = {
     "Host": "www.xionger.icu:8080",
@@ -41,8 +53,9 @@ class Zhenshi:
         self.fakeip = account.ip
         self.Host = f"http://{default_headers['Host']}"
         if account.token is None:
-            raise ValueError("Account must be provided")
-        self.token = account.token
+            self.login()
+        else:
+            self.token = account.token
         self.default_headers["Authorization"] = account.token
 
     
