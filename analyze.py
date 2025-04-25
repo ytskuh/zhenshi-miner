@@ -3,11 +3,15 @@ from zhenshiapi import Zhenshi, Account
 import polars as pl
 import numpy as np
 
-token = os.environ.get("TOKEN")
-if token is None:
-    raise ValueError("TOKEN environment variable not set")
-
-z1 = Zhenshi(Account.from_dict({"token": token}))
+z1 = Zhenshi(Account.from_dict({
+        "username": "sToQT+6K99sqJguzQrtSNw==",
+        "password": "c51d5a83a31154c7c79d9144fee62980151fbc23d3de7d5a8148149eb1142cd6",
+        "nickname": "logan58",
+        "userPic": "https://img3.tapimg.com/default_avatars/b468cd2e3133f17dc68d74a28f3651d2.jpg?imageMogr2/auto-orient/strip/thumbnail/!270x270r/gravity/Center/crop/270x270/format/jpg/interlace/1/quality/80",
+        "androidId": "af94ccb35e995b15",
+        "ip": "166.227.157.93",
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbGFpbXMiOnsidXNlcm5hbWUiOiJzVG9RVCs2Szk5c3FKZ3V6UXJ0U053PT0ifSwiZXhwIjoxNzc3MTExNzUzfQ.fIdyqlmvtIHd4MmQD1Vst3aRQrFGqL2-CYmRKVVsXxc"
+    }))
 
 stock_list = pl.from_dicts(z1.get_stocklist()['data'])
 rank = pl.from_dicts(z1.get_rank()["data"])
