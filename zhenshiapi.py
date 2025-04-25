@@ -25,16 +25,15 @@ class Account:
             token=data.get('token', None)
         )
     
-    @classmethod
-    def to_dict(cls, account):
+    def to_dict(cls):
         return {
-            'username': account.username,
-            'password': account.password,
-            'nickname': account.nickname,
-            'userPic': account.userPic,
-            'androidId': account.androidId,
-            'ip': account.ip,
-            'token': account.token
+            "username": cls.username,
+            "password": cls.password,
+            "nickname": cls.nickname,
+            "userPic": cls.userPic,
+            "androidId": cls.androidId,
+            "ip": cls.ip,
+            "token": cls.token
         }
 
 default_headers = {
