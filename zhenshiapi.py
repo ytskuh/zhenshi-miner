@@ -52,6 +52,7 @@ class Zhenshi:
         self.proxy = proxy
         self.fakeip = account.ip
         self.Host = f"http://{default_headers['Host']}"
+        self.default_headers["X-Forwarded-For"] = self.fakeip
         if account.token is None:
             self.login()
         else:
@@ -59,13 +60,13 @@ class Zhenshi:
         self.default_headers["Authorization"] = account.token
 
     
-    def send_request(self, endpoint, headers, data):
+    def send_request(self, endpoint, headers, data = None, method='POST'):
         submit_headers = headers.copy()  # Create a copy to avoid shared state issues
-        submit_headers["Content-Length"] = str(len(data))
-        if self.fakeip:
-            submit_headers["X-Forwarded-For"] = self.fakeip
+        # submit_headers["Content-Length"] = str(len(data))
         try:
-            response = requests.post(f"{self.Host}/{endpoint}", headers=submit_headers, data=data, proxies=self.proxy)
+            # Print debug info
+            # print(f"Sending request to {self.Host}/{endpoint} with headers: {submit_headers} and data: {data}")
+            response = requests.request(method=method, url=f"{self.Host}/{endpoint}", headers=submit_headers, data=data, proxies=self.proxy)
             response.raise_for_status()  # Raise an error for bad responses
             return response.json()
         except requests.RequestException as e:
@@ -77,13 +78,21 @@ class Zhenshi:
         
     def login(self):
         endpoint = "user/login"
-        data = f"username={self.account.username}&password={self.account.password}&picurl={self.account.userPic}&nickname={self.account.nickname}&deviceid={self.account.androidId}&ip={self.fakeip}"
+        data = {
+            "username": self.account.username,
+            "password": self.account.password,
+            "nickname": self.account.nickname,
+            "userPic": self.account.userPic,
+            "androidId": self.account.androidId
+        }
         response = self.send_request(endpoint, self.default_headers, data)
-        if response and 'data' in response:
+        if response and response['code'] == 200:
+            self.account.token = response['message']
             self.token = response['message']
             self.default_headers["Authorization"] = self.token
             return response
         else:
+            print(response)
             raise ValueError("Login failed or invalid response")
         
     def check(self):
@@ -101,77 +110,89 @@ class Zhenshi:
     
     def get_kline(self, code):
         endpoint = "stock/getKLineByCode"
-        data = f"code={code}"
+        data = {"code": code}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def get_orderbook(self, code):
         endpoint = "trade/priceList"
-        data = f"code={code}"
+        data = {"code": code}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def get_userstock(self, code):
         endpoint = "stock/getUserStockByCode"
-        data = f"code={code}"
+        data = {"code": code}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def get_allorder(self):
         endpoint = "trade/getAllOrder"
-        data = ""
-        response = self.send_request(endpoint, self.default_headers, data)
+        response = self.send_request(endpoint, self.default_headers)
         return response
     
     def addorder(self, code, number, price, operation):
         endpoint = "trade/addOrder"
-        data = f"code={code}&number={number}&price={price}&operation={operation}"
+        data = {"code": code, "number": number, "price": price, "operation": operation}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def cancelorder(self, id):
         endpoint = "trade/cancelOrder"
-        data = f"id={id}"
+        data = {"id": id}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def add_lotteryorder(self, number, multiple):
         endpoint = "lottery/addLotteryOrder"
-        data = f"number={number}&multiple={multiple}"
+        data = {"number": number, "multiple": multiple}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def get_userlotteryorder(self):
         endpoint = "lottery/getUserLotteryOrder"
-        data = ""
-        response = self.send_request(endpoint, self.default_headers, data)
+        response = self.send_request(endpoint, self.default_headers)
         return response
     
     def delete_lotteryorder(self, id):
         endpoint = "lottery/deleteLotteryOrder"
-        data = f"id={id}"
+        data = {"id": id}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def reward(self):
         endpoint = "user/reward"
-        data = ""
-        response = self.send_request(endpoint, self.default_headers, data)
+        response = self.send_request(endpoint, self.default_headers)
         return response
     
     def update_nickname(self, nickname):
         endpoint = "user/updateNickname"
-        data = f"nickname={nickname}"
+        data = {"nickname": nickname}
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
     def get_rank(self):
         endpoint = "user/getRank"
-        data = ""
-        response = self.send_request(endpoint, self.default_headers, data)
+        response = self.send_request(endpoint, self.default_headers)
+        return response
+    
+    def get_rank_money(self):
+        endpoint = "user/getRankMoney"
+        response = self.send_request(endpoint, self.default_headers)
         return response
 
     def cancel_all_orders(self):
         orders = self.get_allorder()['data']
         for o in orders:
             self.cancelorder(o['id'])
+
+    def get_other_userstock_byname(self, username):
+        endpoint = "stock/getOtherUserStockByUsername"
+        data = {"username": username}
+        response = self.send_request(endpoint, self.default_headers, data)
+        return response
+    
+    def get_stocklist(self):
+        endpoint = "stock/list"
+        response = self.send_request(endpoint, self.default_headers, method='GET')
+        return response

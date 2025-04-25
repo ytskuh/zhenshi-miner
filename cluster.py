@@ -83,14 +83,14 @@ class Cluster:
 
     def create_account(self) -> Account:
         """Creates a new account with random values."""
-        username = utils.generate_random_nickname()
+        username = utils.generate_random_username()
         password = utils.username_to_password(username)
         nickname = utils.generate_random_nickname()
-        userPic = ""
+        userPic = utils.generate_random_userPic()
         androidId = utils.generate_random_androidId()
         ip = utils.generate_random_ip()
         
-        account = Account(username, password, nickname, userPic, androidId, ip)
+        account = Account(username, password, nickname, userPic, androidId, ip, None)
         self.accounts.append(account)
         self.storage.save_accounts(self.accounts)
         
@@ -105,6 +105,18 @@ class Cluster:
         """Removes an account from the cluster."""
         self.accounts.remove(account)
         self.storage.save_accounts(self.accounts)
+    
+    def update_account(self, account: Account) -> None:
+        """Updates an existing account in the cluster."""
+        for i, acc in enumerate(self.accounts):
+            if acc.username == account.username:
+                self.accounts[i] = account
+                break
+        self.storage.save_accounts(self.accounts)
+    
+    def get_accounts(self) -> List[Account]:
+        """Returns the list of accounts in the cluster."""
+        return self.accounts
     
     def batch_execution(self, method: Callable, args_list: List[Tuple[Any, ...]], total_time: float) -> BatchExecutionHandler:
         """

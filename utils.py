@@ -37,6 +37,18 @@ def username_to_password(username):
     
     return hashed_password
 
+def generate_random_userPic():
+    pic_urls = [
+        "https://img3.tapimg.com/default_avatars/384aa197eceba6322c9af740d008e65e.jpg?imageMogr2/auto-orient/strip/thumbnail/!270x270r/gravity/Center/crop/270x270/format/jpg/interlace/1/quality/80",
+        "https://img3.tapimg.com/default_avatars/0222bbb6df946833752c1ae27481533b.jpg?imageMogr2/auto-orient/strip/thumbnail/!270x270r/gravity/Center/crop/270x270/format/jpg/interlace/1/quality/80",
+        "https://img3.tapimg.com/default_avatars/2e37ca25ddfc668fe5ef1265689e5868.jpg?imageMogr2/auto-orient/strip/thumbnail/!270x270r/gravity/Center/crop/270x270/format/jpg/interlace/1/quality/80",
+        "https://img3.tapimg.com/default_avatars/8d7b8d6bfdbafca5212ba9ab29320611.jpg?imageMogr2/auto-orient/strip/thumbnail/!270x270r/gravity/Center/crop/270x270/format/jpg/interlace/1/quality/80",
+        "https://img3.tapimg.com/default_avatars/b468cd2e3133f17dc68d74a28f3651d2.jpg?imageMogr2/auto-orient/strip/thumbnail/!270x270r/gravity/Center/crop/270x270/format/jpg/interlace/1/quality/80"
+    ]
+    # 随机选择一个图片URL
+    random_pic = random.choice(pic_urls)
+    return random_pic
+
 def generate_random_androidId():
     # Android ID通常是16个十六进制字符组成的字符串
     # 例如：e9f7d2e514805c9d
@@ -46,31 +58,11 @@ def generate_random_androidId():
     
     # 生成16个随机十六进制字符
     random_hex = ''.join(random.choice(hex_chars) for _ in range(16))
-    
+
     return random_hex
 
 def generate_random_ip():
-    # 生成随机公网IP地址
-    # 避开私有IP范围:
-    # 10.0.0.0 到 10.255.255.255
-    # 172.16.0.0 到 172.31.255.255
-    # 192.168.0.0 到 192.168.255.255
-    
-    # 第一段: 避开10, 127, 169, 172, 192
-    first_octet_options = [i for i in range(1, 224) if i not in [10, 127, 169, 172, 192]]
-    first = random.choice(first_octet_options)
-    
-    # 针对特殊情况处理剩余数字段
-    if first == 172:
-        # 避开 172.16.0.0 到 172.31.255.255
-        second = random.randint(0, 15) or random.randint(32, 255)
-    elif first == 192:
-        # 避开 192.168.0.0
-        second = random.choice([i for i in range(256) if i != 168])
-    else:
-        second = random.randint(0, 255)
-        
-    third = random.randint(0, 255)
-    fourth = random.randint(1, 254)  # 避开.0和.255（通常保留）
-    
-    return f"{first}.{second}.{third}.{fourth}"
+    fake = faker.Faker()
+    # 生成一个随机的IPv4地址
+    ip = fake.ipv4()
+    return ip
