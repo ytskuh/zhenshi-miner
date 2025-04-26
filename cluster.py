@@ -77,7 +77,15 @@ class BatchExecutionHandler:
             self._running = False
 
 class Cluster:
-    def __init__(self, storage_file):
+    def __init__(self, accounts: List[Account] = None, storage_file: Optional[str] = None):
+        self.accounts = accounts
+        if storage_file:
+            self.storage = AccountStorage(storage_file)
+            self.storage.save_accounts(accounts)
+        else:
+            self.storage = None
+
+    def from_json(self, storage_file):
         self.storage = AccountStorage(storage_file)
         self.accounts = self.storage.load_accounts()
 
@@ -114,9 +122,12 @@ class Cluster:
                 break
         self.storage.save_accounts(self.accounts)
     
-    def get_accounts(self) -> List[Account]:
-        """Returns the list of accounts in the cluster."""
-        return self.accounts
+    def get_account(self, username: str) -> Optional[Account]:
+        """Retrieves an account by username."""
+        for account in self.accounts:
+            if account.username == username:
+                return account
+        return None
     
     def batch_execution(self, method: Callable, args_list: List[Tuple[Any, ...]], total_time: float) -> BatchExecutionHandler:
         """

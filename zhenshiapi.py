@@ -37,7 +37,7 @@ class Account:
         }
 
 default_headers = {
-    "Host": "www.xionger.icu:8080",
+    "Host": "www.xionger.icu:8443",
     "Connection": "Keep-Alive",
     "Accept-Encoding": "gzip",
     "User-Agent": "okhttp/4.9.3",
@@ -50,7 +50,7 @@ class Zhenshi:
         self.default_headers = default_headers.copy()
         self.proxy = proxy
         self.fakeip = account.ip
-        self.Host = f"http://{default_headers['Host']}"
+        self.Host = f"https://{default_headers['Host']}"
         self.default_headers["X-Forwarded-For"] = self.fakeip
         if account.token is None:
             self.login()
@@ -119,10 +119,9 @@ class Zhenshi:
         response = self.send_request(endpoint, self.default_headers, data)
         return response
     
-    def get_userstock(self, code):
-        endpoint = "stock/getUserStockByCode"
-        data = {"code": code}
-        response = self.send_request(endpoint, self.default_headers, data)
+    def get_userstock(self):
+        endpoint = "stock/getUserStock"
+        response = self.send_request(endpoint, self.default_headers, None)
         return response
     
     def get_allorder(self):
@@ -194,4 +193,9 @@ class Zhenshi:
     def get_stocklist(self):
         endpoint = "stock/list"
         response = self.send_request(endpoint, self.default_headers, method='GET')
+        return response
+    
+    def receive_dividened(self):
+        endpoint = "user/receiveDividend"
+        response = self.send_request(endpoint, self.default_headers)
         return response
