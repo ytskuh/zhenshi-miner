@@ -88,6 +88,8 @@ class Zhenshi:
         if response and response['code'] == 200:
             self.account.token = response['message']
             self.token = response['message']
+            self.username = response['data']['username']
+            self.androidId = response['data']['androidId']
             self.default_headers["Authorization"] = self.token
             return response
         else:
@@ -152,6 +154,12 @@ class Zhenshi:
         response = self.send_request(endpoint, self.default_headers)
         return response
     
+    def receive_lottery_money(self, id):
+        endpoint = "lottery/receiveLotteryMoney"
+        data = {"id": id}
+        response = self.send_request(endpoint, self.default_headers, data)
+        return response
+    
     def delete_lotteryorder(self, id):
         endpoint = "lottery/deleteLotteryOrder"
         data = {"id": id}
@@ -160,6 +168,11 @@ class Zhenshi:
     
     def reward(self):
         endpoint = "user/reward"
+        response = self.send_request(endpoint, self.default_headers)
+        return response
+    
+    def reward_new(self):
+        endpoint = "user/rewardNew"
         response = self.send_request(endpoint, self.default_headers)
         return response
     
@@ -198,4 +211,21 @@ class Zhenshi:
     def receive_dividened(self):
         endpoint = "user/receiveDividend"
         response = self.send_request(endpoint, self.default_headers)
+        return response
+    
+    def get_last_unopened_mining_data(self):
+        endpoint = "mining/getLastUnOpenedMiningData"
+        response = self.send_request(endpoint, self.default_headers)
+        return response
+    
+    def submit_mining_answer(self, period, answer):
+        endpoint = "mining/submitMiningAnswer"
+        data = {"period": period, "answer": answer}
+        response = self.send_request(endpoint, self.default_headers, data)
+        return response
+    
+    def get_user_stock_rank_by_code(self, code):
+        endpoint = "stock/getUserStockRankByCode"
+        data = {"code": code}
+        response = self.send_request(endpoint, self.default_headers, data)
         return response
